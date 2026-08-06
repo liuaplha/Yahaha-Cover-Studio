@@ -1,6 +1,6 @@
-import { importShared } from './__federation_fn_import-ui-rev-20260719-01.js';
-import { _ as _export_sfc } from './_plugin-vue_export-helper-ui-rev-20260719-01.js';
-import { g as getTemplateFontFamilyStack, S as SEMANTIC_FONT_ITEMS, B as BUILTIN_FONT_ITEMS, l as loadPreviewFontFaces, a as BlueprintField, b as BlueprintSelect, c as getTemplateFontFaceName, M as MCR_CONTROL_DEFAULTS, A as AsyncStatusDots, V as ViewportSaveToast, d as createCompactHeaderScrollController } from './compactHeaderScrollRoot-ui-rev-20260719-01.js';
+import { importShared } from './__federation_fn_import-ui-rev-20260806-01.js';
+import { _ as _export_sfc } from './_plugin-vue_export-helper-ui-rev-20260806-01.js';
+import { g as getTemplateFontFamilyStack, S as SEMANTIC_FONT_ITEMS, B as BUILTIN_FONT_ITEMS, l as loadPreviewFontFaces, a as BlueprintField, b as BlueprintSelect, c as getTemplateFontFaceName, M as MCR_CONTROL_DEFAULTS, A as AsyncStatusDots, V as ViewportSaveToast, d as createCompactHeaderScrollController } from './compactHeaderScrollRoot-ui-rev-20260806-01.js';
 
 const {defineComponent:_defineComponent$6} = await importShared('vue');
 

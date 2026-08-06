@@ -127,7 +127,7 @@ class YahahaCoverStudio(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/justzerock/MoviePilot-Plugins/main/icons/yahaha-cover-studio.png"
     # 插件版本
-    plugin_version = "2.2.9"
+    plugin_version = "2.2.10"
     # 插件作者
     plugin_author = "呀哈哈"
     # 作者主页
@@ -2580,6 +2580,13 @@ class YahahaCoverStudio(_PluginBase):
             raw = await self.__read_api_payload(request=request, data=data, kwargs=kwargs)
             if not isinstance(raw, dict) or not raw:
                 return {"code": 1, "msg": "配置数据为空"}
+            cron = str(raw.get("cron") or "").strip()
+            if cron:
+                try:
+                    CronTrigger.from_crontab(cron)
+                except (TypeError, ValueError) as err:
+                    return {"code": 1, "msg": f"定时任务 cron 表达式无效: {err}"}
+            raw["cron"] = cron
             title_config = str(raw.get("title_config") or "")
             strict_raw = raw.get("title_config_strict", False)
             strict = bool(strict_raw) if not isinstance(strict_raw, str) else strict_raw.lower() in ("1", "true", "yes", "on")
@@ -2605,7 +2612,7 @@ class YahahaCoverStudio(_PluginBase):
             self._transfer_monitor = as_bool(raw.get("transfer_monitor"), bool(self._transfer_monitor))
             self._monitor_source = "emby" if raw.get("monitor_source") == "emby" else "transfer"
             self._lock_latest_sort = as_bool(raw.get("lock_latest_sort"), bool(self._lock_latest_sort))
-            self._cron = str(raw.get("cron") or "").strip()
+            self._cron = cron
             self._delay = self.__clamp_value(raw.get("delay", self._delay or 60), 0, 3600, 60, "delay[save_config]", int)
             self._selected_servers = raw.get("selected_servers") if isinstance(raw.get("selected_servers"), list) else []
             self._include_libraries = raw.get("include_libraries") if isinstance(raw.get("include_libraries"), list) else []
@@ -2658,6 +2665,13 @@ class YahahaCoverStudio(_PluginBase):
             )
             self._history_retention_batches = self.__clamp_value(raw.get("history_retention_batches", self._history_retention_batches), 1, 1000, 30, "history_retention_batches[save]", int)
             self.__update_config()
+            # Vue 设置页绕过了 MoviePilot 自带的插件配置保存流程，因此需要
+            # 主动通知宿主刷新插件服务，否则新 cron 只会写入配置，任务列表
+            # 要等插件重载后才会更新。
+            eventmanager.send_event(
+                EventType.PluginReload,
+                data={"plugin_id": self.__class__.__name__},
+            )
             logger.info("【YahahaCoverStudio】Vue 设置页配置已保存")
             return {"code": 0, "msg": "配置已保存", "data": {"config": raw}}
         except Exception as e:
@@ -6173,13 +6187,16 @@ class YahahaCoverStudio(_PluginBase):
         """
         services = []
         if self._enabled and self._cron:
-            services.append({
-                "id": "YahahaCoverStudio",
-                "name": "媒体库封面更新服务",
-                "trigger": CronTrigger.from_crontab(self._cron),
-                "func": self.__update_all_libraries,
-                "kwargs": {}
-            })
+            try:
+                services.append({
+                    "id": "YahahaCoverStudio",
+                    "name": "媒体库封面更新服务",
+                    "trigger": CronTrigger.from_crontab(self._cron),
+                    "func": self.__update_all_libraries,
+                    "kwargs": {}
+                })
+            except (TypeError, ValueError) as e:
+                logger.warning(f"封面更新 cron 表达式无效，已跳过定时任务: {self._cron}, {e}")
         if self._enabled and self._backup_enabled and self._backup_cron:
             try:
                 services.append({
@@ -9809,8 +9826,11 @@ class YahahaCoverStudio(_PluginBase):
         """
         从媒体项信息中获取项目ID
         """
+        item_id = item.get("Id")
+        item_type = item.get("Type")
+
         # Emby/Jellyfin
-        if item['Type'] in 'MusicAlbum,Audio':
+        if item_type in {"MusicAlbum", "Audio"}:
             if item.get("ParentBackdropImageTags") and len(item["ParentBackdropImageTags"]) > 0:
                 item_id = item.get("ParentBackdropItemId")
             elif item.get("PrimaryImageTag"):
@@ -9820,13 +9840,21 @@ class YahahaCoverStudio(_PluginBase):
 
         elif self._cover_style == 'static_3' or self._cover_style in ['animated_1', 'animated_2', 'animated_3', 'animated_4']:
             if self._use_primary:
-                if (item.get("ImageTags") and item.get("ImageTags").get("Primary")) \
+                if item_type == "Episode" and item.get("SeriesPrimaryImageTag"):
+                    item_id = item.get("SeriesId") or item_id
+                elif item_type == "Episode" and item.get("ParentBackdropImageTags"):
+                    item_id = item.get("ParentBackdropItemId") or item_id
+                elif (item.get("ImageTags") and item.get("ImageTags").get("Primary")) \
                     or (item.get("BackdropImageTags") and len(item["BackdropImageTags"]) > 0):
                     item_id = item.get("Id")
                 elif item.get("ParentBackdropImageTags") and len(item["ParentBackdropImageTags"]) > 0:
                     item_id = item.get("ParentBackdropItemId")
             else:
-                if item.get("ParentBackdropImageTags") and len(item["ParentBackdropImageTags"]) > 0:
+                if item_type == "Episode" and item.get("ParentBackdropImageTags"):
+                    item_id = item.get("ParentBackdropItemId") or item_id
+                elif item_type == "Episode" and item.get("SeriesPrimaryImageTag"):
+                    item_id = item.get("SeriesId") or item_id
+                elif item.get("ParentBackdropImageTags") and len(item["ParentBackdropImageTags"]) > 0:
                     item_id = item.get("ParentBackdropItemId")
                 elif (item.get("ImageTags") and item.get("ImageTags").get("Primary")) \
                     or (item.get("BackdropImageTags") and len(item["BackdropImageTags"]) > 0):
@@ -9834,13 +9862,21 @@ class YahahaCoverStudio(_PluginBase):
 
         elif self._cover_style.startswith('static'):
             if self._use_primary:
-                if (item.get("BackdropImageTags") and len(item["BackdropImageTags"]) > 0) \
+                if item_type == "Episode" and item.get("SeriesPrimaryImageTag"):
+                    item_id = item.get("SeriesId") or item_id
+                elif item_type == "Episode" and item.get("ParentBackdropImageTags"):
+                    item_id = item.get("ParentBackdropItemId") or item_id
+                elif (item.get("BackdropImageTags") and len(item["BackdropImageTags"]) > 0) \
                     or (item.get("ImageTags") and item.get("ImageTags").get("Primary")):
                     item_id = item.get("Id")
                 elif item.get("ParentBackdropImageTags") and len(item["ParentBackdropImageTags"]) > 0:
                     item_id = item.get("ParentBackdropItemId")
             else:
-                if item.get("ParentBackdropImageTags") and len(item["ParentBackdropImageTags"]) > 0:
+                if item_type == "Episode" and item.get("ParentBackdropImageTags"):
+                    item_id = item.get("ParentBackdropItemId") or item_id
+                elif item_type == "Episode" and item.get("SeriesPrimaryImageTag"):
+                    item_id = item.get("SeriesId") or item_id
+                elif item.get("ParentBackdropImageTags") and len(item["ParentBackdropImageTags"]) > 0:
                     item_id = item.get("ParentBackdropItemId")
                 elif (item.get("BackdropImageTags") and len(item["BackdropImageTags"]) > 0) \
                     or (item.get("ImageTags") and item.get("ImageTags").get("Primary")):

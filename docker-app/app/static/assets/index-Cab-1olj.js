@@ -59645,8 +59645,8 @@ const mdi = {
   component: VSvgIcon
 };
 
-const UI_REV = "20260719-01";
-const PROGRAM_VERSION = "2.2.9";
+const UI_REV = "20260806-01";
+const PROGRAM_VERSION = "2.2.10";
 
 const MCR_CONTROL_DEFAULTS = {
   VTextField: {

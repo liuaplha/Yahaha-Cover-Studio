@@ -203,7 +203,7 @@ def normalize_media_servers(config: dict[str, Any]) -> list[dict[str, Any]]:
     return servers
 
 
-app = FastAPI(title="Yahaha Cover Studio", version="2.2.9")
+app = FastAPI(title="Yahaha Cover Studio", version="2.2.10")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -393,6 +393,7 @@ class ScheduleManager:
         self.last_generation_key = ""
         self.last_backup_key = ""
         self.last_error = ""
+        self.last_generation = ""
         self.last_backup = ""
 
     def start(self) -> None:
@@ -426,26 +427,44 @@ class ScheduleManager:
         key = now.strftime("%Y%m%d%H%M")
         config = load_config()
         actions: list[str] = []
+        errors: list[str] = []
 
         cron_expr = str(config.get("cron") or "").strip()
-        if bool(config.get("enabled", True)) and cron_expr and cron_matches(cron_expr, now) and self.last_generation_key != key:
-            self.last_generation_key = key
-            style = str(config.get("style_config", {}).get("style") or "")
-            await generation_manager.start(style, trigger="schedule")
-            actions.append("generation")
+        if cron_expr:
+            try:
+                validate_cron_expression(cron_expr)
+            except ValueError as err:
+                errors.append(f"定时生成 cron 无效: {err}")
+            else:
+                if bool(config.get("enabled", True)) and cron_matches(cron_expr, now) and self.last_generation_key != key:
+                    style = str(config.get("style_config", {}).get("style") or "")
+                    await generation_manager.start(style, trigger="schedule")
+                    self.last_generation_key = key
+                    self.last_generation = now.isoformat()
+                    APP_LOGGER.info("定时生成任务已触发 cron=%s scheduled_at=%s", cron_expr, self.last_generation)
+                    actions.append("generation")
 
         backup_expr = str(config.get("backup_cron") or "").strip()
-        if backup_expr and cron_matches(backup_expr, now) and self.last_backup_key != key:
-            self.last_backup_key = key
-            path = create_config_backup(config, str(config.get("backup_path") or ""))
-            self.last_backup = str(path)
-            actions.append("backup")
+        if backup_expr:
+            try:
+                validate_cron_expression(backup_expr)
+            except ValueError as err:
+                errors.append(f"定时备份 cron 无效: {err}")
+            else:
+                if cron_matches(backup_expr, now) and self.last_backup_key != key:
+                    path = create_config_backup(config, str(config.get("backup_path") or ""))
+                    self.last_backup_key = key
+                    self.last_backup = str(path)
+                    APP_LOGGER.info("定时备份任务已触发 cron=%s path=%s", backup_expr, self.last_backup)
+                    actions.append("backup")
 
+        self.last_error = "；".join(errors)
         return {"actions": actions, "last_backup": self.last_backup, "last_error": self.last_error}
 
     def snapshot(self) -> dict[str, Any]:
         return {
             "scheduler_last_error": self.last_error,
+            "scheduler_last_generation": self.last_generation,
             "scheduler_last_backup": self.last_backup,
         }
 
@@ -580,7 +599,10 @@ async def post_config(config: dict[str, Any]):
     try:
         current = load_config()
         incoming = {key: value for key, value in config.items() if key != "auth"}
+        validate_schedule_config(incoming)
         return {key: value for key, value in service.save({**current, **incoming}).items() if key != "auth"}
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     except Exception as error:
         APP_LOGGER.exception("配置保存失败: %s", error)
         raise HTTPException(status_code=500, detail=f"配置保存失败: {error}") from error
@@ -1208,6 +1230,10 @@ async def plugin_backups():
 @app.post("/api/plugin/MediaCoverGenerator/save_config")
 async def plugin_save_config(payload: dict[str, Any]):
     incoming = dict(payload.get("config") or payload or {})
+    try:
+        validate_schedule_config(incoming)
+    except ValueError as error:
+        return {"code": 1, "msg": str(error), "data": {"config": to_plugin_config(load_config())}}
     config = from_plugin_config(incoming, load_config())
     save_config(config)
     service.reload()
@@ -1616,9 +1642,38 @@ def create_config_backup(config: dict[str, Any], target: str = "") -> Path:
     return storage.write_backup(target_path, config, version=app.version)
 
 
-def cron_matches(expr: str, now: datetime) -> bool:
+def validate_schedule_config(config: dict[str, Any]) -> None:
+    for key, label in (("cron", "定时生成 cron"), ("backup_cron", "定时备份 cron")):
+        if key not in config:
+            continue
+        expression = str(config.get(key) or "").strip()
+        if not expression:
+            continue
+        try:
+            validate_cron_expression(expression)
+        except ValueError as error:
+            raise ValueError(f"{label} 表达式无效: {error}") from error
+
+
+def validate_cron_expression(expr: str) -> str:
     parts = str(expr or "").strip().split()
     if len(parts) != 5:
+        raise ValueError("必须是 5 位表达式：分钟 小时 日期 月份 星期")
+    for field, minimum, maximum, sunday_alias in (
+        (parts[0], 0, 59, False),
+        (parts[1], 0, 23, False),
+        (parts[2], 1, 31, False),
+        (parts[3], 1, 12, False),
+        (parts[4], 0, 6, True),
+    ):
+        cron_field_values(field, minimum, maximum, sunday_alias)
+    return " ".join(parts)
+
+
+def cron_matches(expr: str, now: datetime) -> bool:
+    try:
+        parts = validate_cron_expression(expr).split()
+    except ValueError:
         return False
     minute, hour, day, month, weekday = parts
     cron_weekday = (now.weekday() + 1) % 7
@@ -1632,55 +1687,77 @@ def cron_matches(expr: str, now: datetime) -> bool:
 
 
 def cron_field_matches(field: str, value: int, minimum: int, maximum: int, sunday_alias: bool = False) -> bool:
-    field = str(field or "").strip()
-    if not field:
+    try:
+        return value in cron_field_values(field, minimum, maximum, sunday_alias)
+    except ValueError:
         return False
-    for token in field.split(","):
-        token = token.strip()
+
+
+def cron_field_values(field: str, minimum: int, maximum: int, sunday_alias: bool = False) -> set[int]:
+    raw_field = str(field or "").strip()
+    if not raw_field:
+        raise ValueError("字段不能为空")
+    values: set[int] = set()
+    for raw_token in raw_field.split(","):
+        token = raw_token.strip()
         if not token:
-            continue
-        if cron_token_matches(token, value, minimum, maximum, sunday_alias):
-            return True
-    return False
+            raise ValueError(f"字段包含空选项: {raw_field}")
+        values.update(cron_token_values(token, minimum, maximum, sunday_alias))
+    if not values:
+        raise ValueError(f"字段没有有效取值: {raw_field}")
+    return values
 
 
 def cron_token_matches(token: str, value: int, minimum: int, maximum: int, sunday_alias: bool = False) -> bool:
+    try:
+        return value in cron_token_values(token, minimum, maximum, sunday_alias)
+    except ValueError:
+        return False
+
+
+def cron_token_values(token: str, minimum: int, maximum: int, sunday_alias: bool = False) -> set[int]:
+    raw_token = str(token or "").strip()
+    if not raw_token:
+        raise ValueError("cron 选项不能为空")
     step = 1
-    if "/" in token:
-        token, raw_step = token.split("/", 1)
+    if "/" in raw_token:
+        if raw_token.count("/") != 1:
+            raise ValueError(f"步长格式无效: {raw_token}")
+        token, raw_step = raw_token.split("/", 1)
         try:
-            step = max(1, int(raw_step))
-        except Exception:
-            return False
+            step = int(raw_step)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"步长无效: {raw_token}") from error
+        if step <= 0:
+            raise ValueError(f"步长必须大于 0: {raw_token}")
+    else:
+        token = raw_token
     is_wildcard = token in {"*", "?"}
     is_range = "-" in token
     if is_wildcard:
         start, end = minimum, maximum
     elif is_range:
+        if token.count("-") != 1:
+            raise ValueError(f"范围格式无效: {raw_token}")
         raw_start, raw_end = token.split("-", 1)
         try:
             start, end = int(raw_start), int(raw_end)
-        except Exception:
-            return False
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"范围格式无效: {raw_token}") from error
     else:
         try:
             start = end = int(token)
-        except Exception:
-            return False
-    if sunday_alias:
-        if not is_wildcard and not is_range and start == 7 and end == 7:
-            return value == 0
-        if value == 0 and (start == 7 or end == 7):
-            return True
-        if start == 7:
-            start = 0
-        if end == 7:
-            end = maximum
-    start = max(minimum, min(maximum, start))
-    end = max(minimum, min(maximum, end))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"取值无效: {raw_token}") from error
+    allowed_maximum = 7 if sunday_alias and not is_wildcard else maximum
+    if start < minimum or start > allowed_maximum or end < minimum or end > allowed_maximum:
+        raise ValueError(f"取值超出 {minimum}-{allowed_maximum}: {raw_token}")
     if start <= end:
-        return value >= start and value <= end and ((value - start) % step == 0)
-    return (value >= start or value <= end) and ((value - start) % step == 0)
+        sequence = list(range(start, end + 1))
+    else:
+        sequence = list(range(start, allowed_maximum + 1)) + list(range(minimum, end + 1))
+    selected = sequence[::step]
+    return {0 if sunday_alias and item == 7 else item for item in selected}
 
 
 async def delayed_generation_start(delay_seconds: int, style: str, library_name: str) -> None:
