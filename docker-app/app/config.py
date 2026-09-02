@@ -11,7 +11,8 @@ from typing import Any
 import yaml
 
 
-DATA_DIR = Path(os.environ.get("YAHAA_DATA_DIR", "/app/data"))
+_native_data_dir = Path(__file__).resolve().parents[1] / "data"
+DATA_DIR = Path(os.environ.get("YAHAA_DATA_DIR") or (_native_data_dir if os.name == "nt" else "/app/data"))
 CONFIG_PATH = DATA_DIR / "config.yaml"
 
 
@@ -289,7 +290,14 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
 
 def resolve_data_path(value: str | None, fallback: str) -> Path:
     raw = value or fallback
-    path = Path(raw)
+    # Docker defaults are stored as /app/data/... .  Keep existing configs
+    # portable when the standalone application is run directly on Windows.
+    normalized = str(raw).replace("\\", "/")
+    if normalized == "/app/data" or normalized.startswith("/app/data/"):
+        relative = normalized[len("/app/data"):].lstrip("/")
+        path = DATA_DIR / relative
+    else:
+        path = Path(raw)
     if not path.is_absolute():
         path = DATA_DIR / path
     path.mkdir(parents=True, exist_ok=True)

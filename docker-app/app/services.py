@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 import json
+import random
 import re
 import time
 import urllib.request
@@ -23,7 +24,14 @@ from .font_resolution import ResolvedRenderText, resolve_render_text_and_font
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 OUTPUT_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 FONT_EXTENSIONS = {".ttf", ".ttc", ".otf", ".woff", ".woff2"}
-BUNDLED_FONTS_DIR = Path(__file__).parent / "bundled_fonts"
+_container_bundled_fonts_dir = Path(__file__).parent / "bundled_fonts"
+# Docker copies these assets into app/bundled_fonts.  When running the source
+# tree natively (for example on Windows), they remain in the repository root.
+BUNDLED_FONTS_DIR = (
+    _container_bundled_fonts_dir
+    if _container_bundled_fonts_dir.exists()
+    else Path(__file__).parents[1] / "bundled-fonts"
+)
 HISTORY_INDEX_FILE = DATA_DIR / "output" / ".history.json"
 LEGACY_HISTORY_INDEX_FILE = DATA_DIR / "history.json"
 BUILTIN_FONT_URLS = {
@@ -1073,9 +1081,11 @@ class CoverService:
                     continue
                 if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS and path not in paths:
                     paths.append(path)
-                if len(paths) >= limit:
-                    return paths
-        return paths
+        # The source-order setting originally only affected media-server API
+        # calls. Honour its default "Random" value for local folders as well.
+        if str(self.config.get("sort_by") or "Random").lower() == "random":
+            return random.sample(paths, k=min(limit, len(paths)))
+        return paths[:limit]
 
     def local_libraries(self) -> list[dict[str, Any]]:
         input_dir = self.input_directory()

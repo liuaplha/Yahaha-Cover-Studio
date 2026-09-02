@@ -82,7 +82,7 @@ class ScheduleManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first["actions"], ["backup"])
         self.assertEqual(second["actions"], [])
         backup.assert_called_once_with(config, "backups")
-        self.assertEqual(manager.last_backup, "/app/data/backups/config.json")
+        self.assertEqual(manager.last_backup, str(Path("/app/data/backups/config.json")))
 
     async def test_invalid_cron_is_visible_in_scheduler_status(self) -> None:
         manager = ScheduleManager()

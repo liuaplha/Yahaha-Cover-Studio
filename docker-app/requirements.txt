@@ -6,3 +6,4 @@ pyyaml==6.0.2
 fonttools[woff]==4.59.0
 brotli==1.1.0
 opencc-python-reimplemented==0.1.7
+tzdata==2025.2

@@ -537,11 +537,19 @@ async def auth_status(request: Request):
     config = load_config()
     configured = is_auth_configured(config)
     username = authenticated_username(request, config) if configured else None
-    return {
+    response = JSONResponse({
         "configured": configured,
         "authenticated": bool(username),
         "username": username or "",
-    }
+    })
+    # A successful Bearer-token check also renews the HttpOnly session cookie.
+    # This makes refresh resilient when a browser restores local storage before
+    # cookies (or has cleared an earlier session cookie).
+    if username:
+        token = request_token(request.headers.get("authorization"), request.cookies.get(AUTH_COOKIE))
+        if token:
+            set_auth_cookie(response, request, token, config)
+    return response
 
 
 @app.post("/api/auth/setup")
