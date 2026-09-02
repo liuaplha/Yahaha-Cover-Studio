@@ -272,6 +272,7 @@ class CoverService:
         self.history_batch: HistoryBatch | None = None
         self.preview_fonts = PreviewFontService(DATA_DIR, APP_LOGGER)
         self._preview_font_paths: set[str] = set()
+        self._last_local_image_paths: dict[str, list[Path]] = {}
 
     def reload(self) -> dict[str, Any]:
         self.config = load_config()
@@ -289,6 +290,15 @@ class CoverService:
 
     def local_mode(self) -> bool:
         return bool(self.config.get("local_mode", False))
+
+    def remember_local_images(self, library_name: str, image_paths: list[Path]) -> None:
+        """Keep the exact local files used by the latest render for preview sync."""
+        key = str(library_name or "本地封面")
+        self._last_local_image_paths[key] = [path for path in image_paths if path.is_file()]
+
+    def last_local_images(self, library_name: str, limit: int) -> list[Path]:
+        key = str(library_name or "本地封面")
+        return [path for path in self._last_local_image_paths.get(key, []) if path.is_file()][:max(1, limit)]
 
     def input_directory(self) -> Path | None:
         """Return an explicit local source directory, if this mode has one.
@@ -1012,6 +1022,7 @@ class CoverService:
         render_config["library_item_counts"] = {mode: len(image_paths) for mode in ("episodes", "titles", "seasons")}
         output_path = output_dir / f"local_{style_name}{self.output_suffix(render_config, style_name)}"
         await asyncio.to_thread(self.renderer().render, image_paths, str(render_config.get("resolved_title") or "本地封面"), str(render_config.get("resolved_subtitle") or "Local Library"), style_name, render_config, output_path)
+        self.remember_local_images("本地封面", image_paths)
         result = {
             "library": "local",
             "library_id": "",
@@ -1046,6 +1057,7 @@ class CoverService:
         render_config["library_item_counts"] = {mode: len(image_paths) for mode in ("episodes", "titles", "seasons")}
         output_path = output_dir / f"{slugify(library_name)}_{style_name}{self.output_suffix(render_config, style_name)}"
         await asyncio.to_thread(self.renderer().render, image_paths, str(render_config.get("resolved_title") or title), str(render_config.get("resolved_subtitle") or subtitle), style_name, render_config, output_path)
+        self.remember_local_images(library_name, image_paths)
         result = {
             "library": library_name,
             "library_id": slugify(library_name),
@@ -1081,8 +1093,8 @@ class CoverService:
                     continue
                 if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS and path not in paths:
                     paths.append(path)
-        # The source-order setting originally only affected media-server API
-        # calls. Honour its default "Random" value for local folders as well.
+        # Local mode supports both random selection and manually specified
+        # ordering. "Manual" keeps the filename order (01.jpg, 02.jpg, ...).
         if str(self.config.get("sort_by") or "Random").lower() == "random":
             return random.sample(paths, k=min(limit, len(paths)))
         return paths[:limit]

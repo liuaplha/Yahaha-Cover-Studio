@@ -263,6 +263,7 @@
                       </span>
                       <select v-model="sourceSortBy" :disabled="sourceSortDisabled" @change="saveRenderOptions">
                         <option value="Random">随机</option>
+                        <option v-if="isLocalMode" value="Manual">手动指定（按文件名）</option>
                         <option value="DateCreated">{{ sourceSortLocked ? '最新入库（已锁定）' : '最新入库' }}</option>
                         <option value="PremiereDate">最新发行</option>
                       </select>
@@ -1328,7 +1329,8 @@ const animatedSettingsBaseStyle = ref<CoverStyleBase>('static_1')
 const animatedSettingsByStyle = ref<Partial<Record<AnimatedStyleKey, AnimatedStyleSettings>>>({})
 const customFontItems = ref<FontLibraryItem[]>([])
 const posterSource = ref<'backdrop' | 'poster'>('backdrop')
-const sourceSortBy = ref<'Random' | 'DateCreated' | 'PremiereDate'>('Random')
+const sourceSortBy = ref<'Random' | 'Manual' | 'DateCreated' | 'PremiereDate'>('Random')
+const isLocalMode = ref(false)
 const sourceSortLocked = ref(false)
 const imageCountMode = ref<'auto' | 'fixed'>('auto')
 const imageCount = ref(9)
@@ -1971,7 +1973,12 @@ function stopGenerationStatusPoller() {
 
 async function refreshAfterGenerationComplete() {
   if (!componentActive) return
-  await loadPreviewSources()
+  try {
+    await invalidatePreviewCache(previewRequestBaseKey())
+  } catch (cacheError) {
+    console.warn('preview cache invalidation after generation failed', cacheError)
+  }
+  await loadPreviewSources(undefined, true, true)
   if (!componentActive) return
   if (previewMode.value === 'backend') {
     await loadBackendPreview()
@@ -2333,10 +2340,11 @@ function syncAnimatedSettings(data?: Partial<StatusPayload> | null, baseStyle: C
 
 function syncRenderOptions(data?: Partial<StatusPayload> | null) {
   if (!data) return
+  isLocalMode.value = Boolean(data.local_mode)
   sourceSortLocked.value = Boolean(data.lock_latest_sort)
   posterSource.value = data.poster_source === 'poster' || data.use_primary ? 'poster' : 'backdrop'
-  sourceSortBy.value = ['Random', 'DateCreated', 'PremiereDate'].includes(String(data.sort_by))
-    ? data.sort_by as 'Random' | 'DateCreated' | 'PremiereDate'
+  sourceSortBy.value = ['Random', 'Manual', 'DateCreated', 'PremiereDate'].includes(String(data.sort_by))
+    ? data.sort_by as 'Random' | 'Manual' | 'DateCreated' | 'PremiereDate'
     : 'Random'
   imageCountMode.value = data.image_count_mode === 'fixed' ? 'fixed' : 'auto'
   imageCount.value = clampNumber(data.image_count ?? imageCount.value, 1, 60, 9)
@@ -3465,7 +3473,11 @@ async function loadHistory() {
   }
 }
 
-async function loadPreviewSources(requiredItems?: number, forceRefresh = false): Promise<boolean> {
+async function loadPreviewSources(
+  requiredItems?: number,
+  forceRefresh = false,
+  preferGeneratedSources = false,
+): Promise<boolean> {
   if (!componentActive) return false
   if (isGenerating.value) {
     previewSourcesLoading.value = false
@@ -3488,6 +3500,7 @@ async function loadPreviewSources(requiredItems?: number, forceRefresh = false):
   try {
     const query = new URLSearchParams({ required_items: String(capacity) })
     if (forceRefresh) query.set('force_refresh', 'true')
+    if (preferGeneratedSources) query.set('generated_sources', 'true')
     const suffix = `?${query}`
     const resp = await props.api.get<{ code: number; data?: PreviewSourcePayload; msg?: string }>(`plugin/MediaCoverGenerator/preview_sources${suffix}`)
     if (!componentActive) return false

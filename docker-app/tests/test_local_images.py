@@ -25,18 +25,35 @@ class LocalImageSelectionTests(unittest.TestCase):
             sample.assert_called_once()
             self.assertEqual([path.name for path in images], ["03.jpg", "04.jpg"])
 
-    def test_non_random_sort_keeps_filename_order(self) -> None:
+    def test_manual_sort_keeps_filename_order(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             for name in ("03.jpg", "01.jpg", "02.jpg"):
                 (root / name).write_bytes(b"image")
 
             service = CoverService()
-            service.config["sort_by"] = "DateCreated"
+            service.config["sort_by"] = "Manual"
             with patch.object(service, "input_directory", return_value=root):
                 images = service.local_images(limit=2)
 
             self.assertEqual([path.name for path in images], ["01.jpg", "02.jpg"])
+
+    def test_latest_rendered_local_images_are_available_for_preview(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            images = []
+            for name in ("03.jpg", "01.jpg", "02.jpg"):
+                path = root / name
+                path.write_bytes(b"image")
+                images.append(path)
+
+            service = CoverService()
+            service.remember_local_images("动漫", images)
+
+            self.assertEqual(
+                [path.name for path in service.last_local_images("动漫", 2)],
+                ["03.jpg", "01.jpg"],
+            )
 
 
 if __name__ == "__main__":

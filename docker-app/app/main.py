@@ -966,10 +966,20 @@ async def plugin_restore_history_covers(payload: dict[str, Any] | None = None):
 
 
 @app.get("/api/plugin/MediaCoverGenerator/preview_sources")
-async def plugin_preview_sources(required_items: int = Query(9), force_refresh: bool = Query(False)):
+async def plugin_preview_sources(
+    required_items: int = Query(9),
+    force_refresh: bool = Query(False),
+    generated_sources: bool = Query(False),
+):
     config = load_config()
     library = await first_library_name(config)
-    source = await ensure_preview_images(config, library, required_items, force_refresh=force_refresh)
+    source = await ensure_preview_images(
+        config,
+        library,
+        required_items,
+        force_refresh=force_refresh,
+        prefer_generated_sources=generated_sources,
+    )
     return ok(source)
 
 
@@ -2627,7 +2637,13 @@ def cached_library_name(config: dict[str, Any], identifier: str) -> str:
     return value
 
 
-async def ensure_preview_images(config: dict[str, Any], library: str, required_items: int, force_refresh: bool = False) -> dict[str, Any]:
+async def ensure_preview_images(
+    config: dict[str, Any],
+    library: str,
+    required_items: int,
+    force_refresh: bool = False,
+    prefer_generated_sources: bool = False,
+) -> dict[str, Any]:
     style_config = config.get("style_config") or {}
     configured_input = str(config.get("covers_input") or "").strip()
     input_dir = Path(configured_input) if configured_input else (DATA_DIR / "input")
@@ -2687,7 +2703,13 @@ async def ensure_preview_images(config: dict[str, Any], library: str, required_i
             "本地",
         )
         preview_style_name, preview_layout = service.scheme_style_and_layout(preview_scheme_id)
-        images = service.local_images(cache_library, limit, include_mock=False)
+        images = (
+            service.last_local_images(cache_library or library, limit)
+            if prefer_generated_sources
+            else []
+        )
+        if not images:
+            images = service.local_images(cache_library, limit, include_mock=False)
         server = "local"
         preview_server_name = "local"
         source_mode = "custom" if configured_input else "local"

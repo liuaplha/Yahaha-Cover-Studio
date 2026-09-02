@@ -399,6 +399,7 @@ export interface StatusPayload {
   servers_ready: boolean
   transfer_monitor?: boolean
   lock_latest_sort?: boolean
+  local_mode?: boolean
   is_generating?: boolean
   generation_source?: string | null
   generation_style?: string | null
