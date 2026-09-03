@@ -272,7 +272,7 @@ class CoverService:
         self.history_batch: HistoryBatch | None = None
         self.preview_fonts = PreviewFontService(DATA_DIR, APP_LOGGER)
         self._preview_font_paths: set[str] = set()
-        self._last_local_image_paths: dict[str, list[Path]] = {}
+        self._last_rendered_image_paths: dict[str, list[Path]] = {}
 
     def reload(self) -> dict[str, Any]:
         self.config = load_config()
@@ -291,14 +291,22 @@ class CoverService:
     def local_mode(self) -> bool:
         return bool(self.config.get("local_mode", False))
 
-    def remember_local_images(self, library_name: str, image_paths: list[Path]) -> None:
-        """Keep the exact local files used by the latest render for preview sync."""
+    def remember_rendered_images(self, library_name: str, image_paths: list[Path]) -> None:
+        """Keep the exact image files used by the latest render for preview sync."""
         key = str(library_name or "本地封面")
-        self._last_local_image_paths[key] = [path for path in image_paths if path.is_file()]
+        self._last_rendered_image_paths[key] = [path for path in image_paths if path.is_file()]
+
+    def last_rendered_images(self, library_name: str, limit: int) -> list[Path]:
+        key = str(library_name or "本地封面")
+        return [path for path in self._last_rendered_image_paths.get(key, []) if path.is_file()][:max(1, limit)]
+
+    def remember_local_images(self, library_name: str, image_paths: list[Path]) -> None:
+        """Compatibility helper for local-mode callers."""
+        self.remember_rendered_images(library_name, image_paths)
 
     def last_local_images(self, library_name: str, limit: int) -> list[Path]:
-        key = str(library_name or "本地封面")
-        return [path for path in self._last_local_image_paths.get(key, []) if path.is_file()][:max(1, limit)]
+        """Compatibility helper for local-mode callers."""
+        return self.last_rendered_images(library_name, limit)
 
     def input_directory(self) -> Path | None:
         """Return an explicit local source directory, if this mode has one.
@@ -974,6 +982,7 @@ class CoverService:
         render_config["library_item_count"] = item_counts.get("episodes", 0)
         output_path = output_dir / f"{slugify(library.name)}_{style_name}{self.output_suffix(render_config, style_name)}"
         await asyncio.to_thread(self.renderer().render, image_paths, str(render_config.get("resolved_title") or title), str(render_config.get("resolved_subtitle") or subtitle), style_name, render_config, output_path)
+        self.remember_rendered_images(library.name, image_paths)
         rendered_at = time.perf_counter()
         uploaded = False
         upload_error = ""

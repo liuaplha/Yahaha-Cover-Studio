@@ -2738,13 +2738,20 @@ async def ensure_preview_images(
         # directory. This keeps an empty covers_input truly empty and prevents a
         # previous server cache from turning into a local image source.
         cache_dir = DATA_DIR / "tmp" / "preview_cache" / slugify(cache_library or requested_library or "default")
-        if configured_input:
+        images = (
+            service.last_rendered_images(cache_library or library or requested_library, limit)
+            if prefer_generated_sources
+            else []
+        )
+        if images:
+            source_mode = "generated"
+        elif configured_input:
             images = service.local_images(cache_library, limit, include_mock=False)
             source_mode = "custom" if images else "media_server"
         else:
             images = [] if force_refresh else preview_cache_images(cache_dir, limit)
             source_mode = "cache" if images else "media_server"
-        server = "local" if configured_input and images else "media_server"
+        server = "local" if configured_input and images and source_mode != "generated" else "media_server"
         if not images:
             try:
                 client, media_library = await service.find_library(requested_library)

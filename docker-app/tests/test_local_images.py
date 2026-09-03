@@ -55,6 +55,23 @@ class LocalImageSelectionTests(unittest.TestCase):
                 ["03.jpg", "01.jpg"],
             )
 
+    def test_latest_rendered_server_images_are_available_for_preview(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            images = []
+            for name in ("server-01.jpg", "server-02.jpg"):
+                path = root / name
+                path.write_bytes(b"image")
+                images.append(path)
+
+            service = CoverService()
+            service.remember_rendered_images("电视剧", images)
+
+            self.assertEqual(
+                [path.name for path in service.last_rendered_images("电视剧", 9)],
+                ["server-01.jpg", "server-02.jpg"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
